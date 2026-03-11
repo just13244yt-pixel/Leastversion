@@ -35,19 +35,18 @@ def load_command():
             return data.get("command", "")
     return ""
 
-def draw_window(stdscr, current_path, items, selected, system_platform):
+def draw_window(stdscr, current_path, items, selected, system_platform, offset):
     stdscr.clear()
     height, width = stdscr.getmaxyx()
-    
+    visible_height = height - 13  # Platz für Befehle und Titel
+
     # Titel
-    if 0 < height:
-        stdscr.addstr(0, 0, f"Pfad: {current_path}"[:width-1], curses.A_BOLD)
-    
-    # Dateien
-    for idx, item in enumerate(items):
-        line_y = idx + 2
-        if line_y >= height - 11:  # Platz für Befehle unten
-            break
+    stdscr.addstr(0, 0, f"Pfad: {current_path}"[:width-1], curses.A_BOLD)
+
+    # Dateien (sichtbarer Bereich)
+    for idx in range(offset, min(offset + visible_height, len(items))):
+        line_y = idx - offset + 2
+        item = items[idx]
         item_path = os.path.join(current_path, item)
         size_str = ""
         if os.path.isdir(item_path):
@@ -63,9 +62,9 @@ def draw_window(stdscr, current_path, items, selected, system_platform):
             stdscr.addstr(line_y, 0, line, curses.color_pair(1))
         else:
             stdscr.addstr(line_y, 0, line)
-    
+
     # Befehle unten
-    help_start = max(height - 11, len(items) + 3)
+    help_start = max(visible_height + 2, len(items) - offset + 3)
     stdscr.hline(help_start-1, 0, "-", width)
     commands = [
         ("↑ / ↓", "Auswahl bewegen"),
@@ -77,6 +76,8 @@ def draw_window(stdscr, current_path, items, selected, system_platform):
         ("v", "Einfügen"),
         ("r", "Umbenennen"),
         ("e", "Editieren"),
+        ("n", "Neue Datei erstellen"),
+        ("f", "Neuen Ordner erstellen"),
         ("Ctrl+A", "Eigenen Befehl eingeben (JSON)"),
         ("ESC", "Befehl ausführen"),
         ("q", "Beenden"),
@@ -87,7 +88,7 @@ def draw_window(stdscr, current_path, items, selected, system_platform):
             break
         line = f"{key:<12} : {desc}"[:width-1]
         stdscr.addstr(line_y, 0, line)
-    
+
     stdscr.refresh()
 
 # ---------- Hauptfunktion ----------
@@ -101,10 +102,20 @@ def main(stdscr):
     clipboard = None
     clipboard_cut = False
     system_platform = platform.system()
+    offset = 0  # für Scrollen
 
     while True:
         items = get_items(current_path)
-        draw_window(stdscr, current_path, items, selected, system_platform)
+        height, _ = stdscr.getmaxyx()
+        visible_height = height - 13
+
+        # Offset anpassen für Scrollen
+        if selected < offset:
+            offset = selected
+        elif selected >= offset + visible_height:
+            offset = selected - visible_height + 1
+
+        draw_window(stdscr, current_path, items, selected, system_platform, offset)
         key = stdscr.getch()
 
         # Navigation
@@ -118,12 +129,13 @@ def main(stdscr):
             if os.path.isdir(chosen_path):
                 current_path = chosen_path
                 selected = 0
-        # Backspace / übergeordneten Ordner wechseln
+                offset = 0
         elif key in [curses.KEY_BACKSPACE, 127, 8]:
             parent = os.path.dirname(current_path)
             if os.path.exists(parent) and parent != current_path:
                 current_path = parent
                 selected = 0
+                offset = 0
         elif key == ord('q'):
             break
 
@@ -131,15 +143,21 @@ def main(stdscr):
         elif key == ord('d'):
             if len(items) == 0: continue
             chosen_path = os.path.join(current_path, items[selected])
-            try:
-                if os.path.isdir(chosen_path):
-                    shutil.rmtree(chosen_path)
-                else:
-                    os.remove(chosen_path)
-                selected = 0
-            except Exception as e:
-                stdscr.addstr(len(items)+2, 0, f"Fehler: {e}"[:curses.COLS-1])
-                stdscr.getch()
+            curses.echo()
+            stdscr.addstr(visible_height+3, 0, f"Willst du '{items[selected]}' wirklich löschen? (j/n): ")
+            stdscr.refresh()
+            answer = stdscr.getstr().decode().lower()
+            curses.noecho()
+            if answer == "j":
+                try:
+                    if os.path.isdir(chosen_path):
+                        shutil.rmtree(chosen_path)
+                    else:
+                        os.remove(chosen_path)
+                    selected = 0
+                except Exception as e:
+                    stdscr.addstr(visible_height+4, 0, f"Fehler: {e}"[:curses.COLS-1])
+                    stdscr.getch()
         elif key == ord('c'):
             if len(items) == 0: continue
             clipboard = os.path.join(current_path, items[selected])
@@ -165,20 +183,20 @@ def main(stdscr):
                     if clipboard_cut:
                         clipboard = None
                 except Exception as e:
-                    stdscr.addstr(len(items)+2, 0, f"Fehler: {e}"[:curses.COLS-1])
+                    stdscr.addstr(visible_height+3, 0, f"Fehler: {e}"[:curses.COLS-1])
                     stdscr.getch()
         elif key == ord('r'):
             if len(items) == 0: continue
             chosen = items[selected]
-            stdscr.addstr(len(items)+2, 0, "Neuer Name: " + " "*50)
+            stdscr.addstr(visible_height+3, 0, "Neuer Name: " + " "*50)
             curses.echo()
-            new_name = stdscr.getstr(len(items)+2, 12, 50).decode()
+            new_name = stdscr.getstr(visible_height+3, 12, 50).decode()
             curses.noecho()
             if new_name:
                 try:
                     os.rename(os.path.join(current_path, chosen), os.path.join(current_path, new_name))
                 except Exception as e:
-                    stdscr.addstr(len(items)+3, 0, f"Fehler: {e}"[:curses.COLS-1])
+                    stdscr.addstr(visible_height+4, 0, f"Fehler: {e}"[:curses.COLS-1])
                     stdscr.getch()
         elif key == ord('e'):
             if len(items) == 0: continue
@@ -191,15 +209,43 @@ def main(stdscr):
                 os.system(f'nano "{chosen_path}"')
             stdscr = curses.initscr()
 
+        # Neue Datei erstellen
+        elif key == ord('n'):
+            curses.echo()
+            stdscr.addstr(visible_height+3, 0, "Dateiname (inkl. Endung z.B. .txt): " + " "*50)
+            stdscr.move(visible_height+3, 35)
+            filename = stdscr.getstr().decode()
+            curses.noecho()
+            if filename:
+                try:
+                    open(os.path.join(current_path, filename), 'w').close()
+                except Exception as e:
+                    stdscr.addstr(visible_height+4, 0, f"Fehler: {e}"[:curses.COLS-1])
+                    stdscr.getch()
+
+        # Neuer Ordner erstellen
+        elif key == ord('f'):
+            curses.echo()
+            stdscr.addstr(visible_height+3, 0, "Name des neuen Ordners: " + " "*50)
+            stdscr.move(visible_height+3, 28)
+            foldername = stdscr.getstr().decode()
+            curses.noecho()
+            if foldername:
+                try:
+                    os.mkdir(os.path.join(current_path, foldername))
+                except Exception as e:
+                    stdscr.addstr(visible_height+4, 0, f"Fehler: {e}"[:curses.COLS-1])
+                    stdscr.getch()
+
         # STRG+A für eigenen Befehl
         elif key == 1:  # Ctrl+A
             curses.echo()
-            stdscr.addstr(len(items)+2, 0, "Eigenen Befehl eingeben: " + " "*50)
-            stdscr.move(len(items)+2, 27)
+            stdscr.addstr(visible_height+3, 0, "Eigenen Befehl eingeben: " + " "*50)
+            stdscr.move(visible_height+3, 27)
             cmd = stdscr.getstr().decode()
             save_command(cmd)
             curses.noecho()
-            stdscr.addstr(len(items)+3, 0, f"Befehl gespeichert in {COMMANDS_FILE}"[:curses.COLS-1])
+            stdscr.addstr(visible_height+4, 0, f"Befehl gespeichert in {COMMANDS_FILE}"[:curses.COLS-1])
             stdscr.getch()
 
         # ESC für Befehl ausführen
